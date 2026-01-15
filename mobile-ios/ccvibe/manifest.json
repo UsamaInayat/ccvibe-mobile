@@ -1,0 +1,15 @@
+{
+    "name": "CCVibe",
+    "description": "Auto-translate Roman Hindi/Urdu messages to English in Discord",
+    "authors": [
+        {
+            "name": "CCVibe",
+            "id": "000000000000000000"
+        }
+    ],
+    "main": "dist/index.js",
+    "vendetta": {
+        "icon": "ic_locale_24px"
+    },
+    "hash": "db1491d49644d95b2ae3014364a8a7d92ef11161ae55e81736b1bdd817059d3a"
+}
