@@ -10,3 +10,26 @@ declare module "@vendetta/metro" {
     export function findByTypeNameAll(name: string, defaultExp?: boolean): any[];
     export function findByStoreName(name: string): any;
 }
+
+declare module "@vendetta/metro/common" {
+    export const FluxDispatcher: {
+        dispatch(event: any): void;
+        subscribe(event: string, callback: (data: any) => void): void;
+        unsubscribe(event: string, callback: (data: any) => void): void;
+        [key: string]: any;
+    };
+    export const React: typeof import("react");
+    export const ReactNative: any;
+    export const stylesheet: any;
+    export const channels: any;
+    export const i18n: any;
+    export const url: any;
+    export const toasts: any;
+    export const clipboard: any;
+    export const assets: any;
+    export const invites: any;
+    export const commands: any;
+    export const navigation: any;
+    export const navigationStack: any;
+    export const NavigationNative: any;
+}
