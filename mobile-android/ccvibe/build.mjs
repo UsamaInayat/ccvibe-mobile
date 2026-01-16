@@ -19,9 +19,11 @@ const buildConfig = {
     target: ["es2020"],
     external: [
         "@vendetta/metro",
+        "@vendetta/metro/common",
         "@vendetta/patcher",
         "@vendetta/plugin",
         "@vendetta/ui",
+        "@vendetta/ui/toasts",
         "@vendetta/storage",
     ],
     define: {
