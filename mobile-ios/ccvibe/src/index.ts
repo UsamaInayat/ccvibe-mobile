@@ -1,6 +1,6 @@
 /*
  * CCVibe Mobile - Auto-translate Roman Hindi/Urdu to English
- * Vendetta/Bunny/Revenge Plugin for Discord Mobile (iOS)
+ * Vendetta/Bunny/Revenge Plugin for Discord Mobile (Android)
  */
 
 import { findByProps } from "@vendetta/metro";
@@ -9,19 +9,12 @@ import { storage } from "@vendetta/plugin";
 import { isLikelyHindiUrdu } from "./detector";
 import { translateToEnglish, clearCache } from "./translate";
 
-// Discord's message module
-const MessageStore = findByProps("getMessage", "getMessages");
-const MessageActions = findByProps("receiveMessage");
-
 // Store patches for cleanup
 const patches: (() => void)[] = [];
 
 // Translation cache for rendered messages
 const translationCache = new Map<string, string>();
 const pendingTranslations = new Set<string>();
-
-// Default settings
-storage.showOriginalOnTap ??= true;
 
 // =============================================================================
 // MESSAGE PROCESSING
@@ -70,52 +63,75 @@ export default {
     onLoad: () => {
         console.log("[CCVibe] Loading plugin...");
 
-        // Patch message rendering to translate Hindi/Urdu messages
-        if (MessageActions?.receiveMessage) {
-            const unpatch = before("receiveMessage", MessageActions, async (args) => {
-                try {
-                    const message = args[0];
-                    if (message?.content && typeof message.content === "string") {
-                        const translated = await processMessage(message.content);
-                        if (translated !== message.content) {
-                            message.content = translated;
-                        }
-                    }
-                } catch (error) {
-                    console.error("[CCVibe] Error in receiveMessage patch:", error);
-                }
-                return args;
-            });
-            patches.push(unpatch);
+        // Initialize default settings
+        storage.showOriginalOnTap ??= true;
+
+        // Find Discord modules at load time (not at module init)
+        let MessageStore: any = null;
+        let MessageActions: any = null;
+
+        try {
+            MessageStore = findByProps("getMessage", "getMessages");
+            MessageActions = findByProps("receiveMessage");
+        } catch (e) {
+            console.error("[CCVibe] Failed to find Discord modules:", e);
         }
 
-        // Alternative: Patch getMessage for cached messages
-        if (MessageStore?.getMessage) {
-            const unpatch = after("getMessage", MessageStore, (args, message) => {
-                if (!message?.content || typeof message.content !== "string") return message;
+        // Patch message receiving for new messages
+        if (MessageActions?.receiveMessage) {
+            try {
+                const unpatch = before("receiveMessage", MessageActions, (args) => {
+                    const message = args[0];
+                    if (message?.content && typeof message.content === "string") {
+                        // Check if it's Hindi/Urdu and start translation
+                        if (isLikelyHindiUrdu(message.content)) {
+                            processMessage(message.content).then(translated => {
+                                if (translated !== message.content) {
+                                    message.content = translated;
+                                }
+                            }).catch(e => console.error("[CCVibe] Translation error:", e));
+                        }
+                    }
+                    return args;
+                });
+                patches.push(unpatch);
+                console.log("[CCVibe] Patched receiveMessage");
+            } catch (e) {
+                console.error("[CCVibe] Failed to patch receiveMessage:", e);
+            }
+        } else {
+            console.log("[CCVibe] MessageActions.receiveMessage not found");
+        }
 
-                try {
+        // Patch getMessage for cached messages
+        if (MessageStore?.getMessage) {
+            try {
+                const unpatch = after("getMessage", MessageStore, (args, message) => {
+                    if (!message?.content || typeof message.content !== "string") return message;
+
                     // Check if we already have a translation
                     const cached = translationCache.get(message.content);
                     if (cached) {
                         return { ...message, content: cached };
                     }
 
-                    // Check if it needs translation
+                    // Check if it needs translation and start async translation
                     if (isLikelyHindiUrdu(message.content)) {
-                        // Start async translation (won't affect this render)
                         processMessage(message.content);
                     }
-                } catch (error) {
-                    console.error("[CCVibe] Error in getMessage patch:", error);
-                }
 
-                return message;
-            });
-            patches.push(unpatch);
+                    return message;
+                });
+                patches.push(unpatch);
+                console.log("[CCVibe] Patched getMessage");
+            } catch (e) {
+                console.error("[CCVibe] Failed to patch getMessage:", e);
+            }
+        } else {
+            console.log("[CCVibe] MessageStore.getMessage not found");
         }
 
-        console.log("[CCVibe] Plugin loaded successfully!");
+        console.log("[CCVibe] Plugin loaded!");
     },
 
     onUnload: () => {
@@ -137,14 +153,5 @@ export default {
         clearCache();
 
         console.log("[CCVibe] Plugin unloaded!");
-    },
-
-    settings: {
-        showOriginalOnTap: {
-            type: "toggle",
-            label: "Show Original on Tap",
-            description: "Show original text in brackets after translation",
-            default: true,
-        },
     },
 };
