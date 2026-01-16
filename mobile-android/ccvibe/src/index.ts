@@ -7,6 +7,7 @@ import { findByProps, findByStoreName } from "@vendetta/metro";
 import { FluxDispatcher } from "@vendetta/metro/common";
 import { before } from "@vendetta/patcher";
 import { storage } from "@vendetta/plugin";
+import { showToast } from "@vendetta/ui/toasts";
 import { isLikelyHindiUrdu } from "./detector";
 import { translateToEnglish, clearCache } from "./translate";
 
@@ -16,6 +17,16 @@ const patches: (() => void)[] = [];
 // Translation cache
 const translationCache = new Map<string, string>();
 
+// Helper to show debug toasts
+function debugToast(msg: string) {
+    try {
+        showToast?.(msg, { duration: 2000 });
+    } catch (e) {
+        // Toast not available
+    }
+    console.log("[CCVibe]", msg);
+}
+
 // =============================================================================
 // MESSAGE PROCESSING
 // =============================================================================
@@ -23,9 +34,12 @@ const translationCache = new Map<string, string>();
 async function processAndUpdateMessage(message: any): Promise<void> {
     if (!message?.content || typeof message.content !== "string") return;
     if (message.content.length < 3) return;
+
+    // Check if Hindi/Urdu
     if (!isLikelyHindiUrdu(message.content)) return;
 
     const originalContent = message.content;
+    debugToast(`Detected: ${originalContent.substring(0, 30)}...`);
 
     // Check cache first
     const cached = translationCache.get(originalContent);
@@ -35,7 +49,6 @@ async function processAndUpdateMessage(message: any): Promise<void> {
     }
 
     try {
-        console.log("[CCVibe] Translating:", originalContent);
         const result = await translateToEnglish(originalContent);
 
         if (result.translated !== result.original) {
@@ -45,10 +58,10 @@ async function processAndUpdateMessage(message: any): Promise<void> {
 
             translationCache.set(originalContent, finalText);
             message.content = finalText;
-            console.log("[CCVibe] Translated to:", finalText);
+            debugToast(`Translated!`);
         }
     } catch (error) {
-        console.error("[CCVibe] Translation error:", error);
+        debugToast(`Error: ${error}`);
     }
 }
 
@@ -58,74 +71,95 @@ async function processAndUpdateMessage(message: any): Promise<void> {
 
 export default {
     onLoad: () => {
-        console.log("[CCVibe] Starting plugin...");
+        debugToast("CCVibe loading...");
 
         // Initialize settings
         storage.showOriginalOnTap ??= true;
 
-        // Method 1: Intercept MESSAGE_CREATE events via FluxDispatcher
-        try {
-            const unpatchCreate = before("dispatch", FluxDispatcher, (args) => {
-                const event = args[0];
-                if (event?.type === "MESSAGE_CREATE" && event?.message) {
-                    processAndUpdateMessage(event.message);
-                }
-                return args;
-            });
-            patches.push(unpatchCreate);
-            console.log("[CCVibe] Hooked MESSAGE_CREATE");
-        } catch (e) {
-            console.error("[CCVibe] Failed to hook FluxDispatcher:", e);
-        }
+        let hookCount = 0;
 
-        // Method 2: Also try to patch the MessageStore for cached messages
+        // Method 1: FluxDispatcher - intercept all dispatch events
         try {
-            const MessageStore = findByStoreName("MessageStore");
-            if (MessageStore?.getMessage) {
-                const unpatch = before("getMessage", MessageStore, (args) => {
-                    return args;
-                });
-                patches.push(unpatch);
-                console.log("[CCVibe] Found MessageStore");
-            }
-        } catch (e) {
-            console.log("[CCVibe] MessageStore not available:", e);
-        }
-
-        // Method 3: Try direct module patching
-        try {
-            const MessageActions = findByProps("sendMessage", "receiveMessage");
-            if (MessageActions?.receiveMessage) {
-                const unpatch = before("receiveMessage", MessageActions, (args) => {
-                    if (args[1]?.message) {
-                        processAndUpdateMessage(args[1].message);
+            if (FluxDispatcher && typeof FluxDispatcher.dispatch === "function") {
+                const unpatch = before("dispatch", FluxDispatcher, (args) => {
+                    const event = args[0];
+                    if (event?.type === "MESSAGE_CREATE" && event?.message) {
+                        processAndUpdateMessage(event.message);
                     }
                     return args;
                 });
                 patches.push(unpatch);
-                console.log("[CCVibe] Hooked receiveMessage");
+                hookCount++;
+                debugToast("Hooked FluxDispatcher");
             }
         } catch (e) {
-            console.log("[CCVibe] receiveMessage not found:", e);
+            debugToast(`FluxDispatcher failed: ${e}`);
         }
 
-        console.log("[CCVibe] Plugin loaded with", patches.length, "patches!");
+        // Method 2: Subscribe to MESSAGE_CREATE
+        try {
+            if (FluxDispatcher?.subscribe) {
+                const handler = (data: any) => {
+                    if (data?.message) {
+                        processAndUpdateMessage(data.message);
+                    }
+                };
+                FluxDispatcher.subscribe("MESSAGE_CREATE", handler);
+                patches.push(() => FluxDispatcher.unsubscribe("MESSAGE_CREATE", handler));
+                hookCount++;
+                debugToast("Subscribed MESSAGE_CREATE");
+            }
+        } catch (e) {
+            debugToast(`Subscribe failed: ${e}`);
+        }
+
+        // Method 3: Try MessageActions
+        try {
+            const MessageActions = findByProps("sendMessage", "receiveMessage");
+            if (MessageActions?.receiveMessage) {
+                const unpatch = before("receiveMessage", MessageActions, (args) => {
+                    const channelId = args[0];
+                    const data = args[1];
+                    if (data?.message) {
+                        processAndUpdateMessage(data.message);
+                    }
+                    return args;
+                });
+                patches.push(unpatch);
+                hookCount++;
+                debugToast("Hooked receiveMessage");
+            }
+        } catch (e) {
+            // Silent fail
+        }
+
+        // Method 4: Try MessageStore
+        try {
+            const MessageStore = findByStoreName("MessageStore");
+            if (MessageStore) {
+                debugToast("Found MessageStore");
+            }
+        } catch (e) {
+            // Silent fail
+        }
+
+        debugToast(`CCVibe loaded! (${hookCount} hooks)`);
     },
 
     onUnload: () => {
-        console.log("[CCVibe] Unloading...");
+        debugToast("CCVibe unloading...");
 
         for (const unpatch of patches) {
             try {
                 unpatch();
             } catch (e) {
-                console.error("[CCVibe] Error unpatching:", e);
+                // Ignore
             }
         }
         patches.length = 0;
         translationCache.clear();
         clearCache();
 
-        console.log("[CCVibe] Unloaded!");
+        debugToast("CCVibe unloaded!");
     },
 };
