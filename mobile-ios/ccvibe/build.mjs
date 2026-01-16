@@ -15,11 +15,9 @@ const buildConfig = {
     bundle: true,
     minify: true,
     sourcemap: false,
-    format: "iife",
-    globalName: "ccvibe",
+    format: "cjs",
     target: ["es2020"],
     external: [
-        "@vendetta/*",
         "@vendetta/metro",
         "@vendetta/patcher",
         "@vendetta/plugin",
