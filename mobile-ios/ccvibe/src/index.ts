@@ -5,14 +5,9 @@
 
 // Store patches for cleanup
 const patches: (() => void)[] = [];
-
-// Translation cache
 const translationCache = new Map<string, string>();
 
-// =============================================================================
-// HINDI/URDU DETECTION (inline to avoid import issues)
-// =============================================================================
-
+// Hindi/Urdu word list
 const HINDI_WORDS = new Set([
     "kya", "hai", "hain", "nahi", "nhi", "acha", "accha", "theek", "thik",
     "kaise", "kaisa", "kyun", "kyu", "kab", "kahan", "kaun", "kon",
@@ -24,7 +19,7 @@ const HINDI_WORDS = new Set([
     "yaar", "bhai", "behen", "dost", "log", "ghar", "kaam",
     "pata", "maloom", "samajh", "soch", "baat", "cheez",
     "abhi", "baad", "pehle", "kal", "aaj", "raat", "subah",
-    "accha", "bura", "sahi", "galat", "zyada", "thoda",
+    "bura", "sahi", "galat", "zyada", "thoda",
     "haan", "han", "ji", "bilkul", "zaroor", "shayad",
     "masla", "mushkil", "pareshani", "dikkat", "taklif",
     "karra", "krra", "horra", "rha", "rhi", "ho", "hy"
@@ -33,17 +28,12 @@ const HINDI_WORDS = new Set([
 function isHindiUrdu(text: string): boolean {
     if (!text || text.length < 3) return false;
     const words = text.toLowerCase().split(/\s+/);
-    let hindiCount = 0;
-    for (const word of words) {
-        const clean = word.replace(/[^a-z]/g, "");
-        if (HINDI_WORDS.has(clean)) hindiCount++;
+    let count = 0;
+    for (const w of words) {
+        if (HINDI_WORDS.has(w.replace(/[^a-z]/g, ""))) count++;
     }
-    return hindiCount >= 2;
+    return count >= 2;
 }
-
-// =============================================================================
-// TRANSLATION (inline Google Translate)
-// =============================================================================
 
 async function translate(text: string): Promise<string> {
     try {
@@ -52,128 +42,123 @@ async function translate(text: string): Promise<string> {
         if (!res.ok) return text;
         const data = await res.json();
         if (data?.[0]) {
-            const translated = data[0]
-                .filter((x: any) => x?.[0])
-                .map((x: any) => x[0])
-                .join("");
-            if (translated && translated.toLowerCase() !== text.toLowerCase()) {
-                return translated;
-            }
+            const result = data[0].filter((x: any) => x?.[0]).map((x: any) => x[0]).join("");
+            if (result && result.toLowerCase() !== text.toLowerCase()) return result;
         }
-    } catch (e) {
-        console.log("[CCVibe] Translation error:", e);
-    }
+    } catch (e) { }
     return text;
 }
 
-// =============================================================================
-// PLUGIN LIFECYCLE
-// =============================================================================
+// Use React Native Alert for visible feedback
+function showAlert(title: string, message: string) {
+    try {
+        const { Alert } = require("react-native");
+        Alert?.alert?.(title, message);
+    } catch (e) {
+        console.log("[CCVibe]", title, message);
+    }
+}
 
 export const onLoad = () => {
-    console.log("[CCVibe] Plugin loading...");
+    console.log("[CCVibe] onLoad called");
 
-    // Dynamically require modules to avoid load-time errors
-    let vendetta: any;
+    // Show alert so user knows plugin loaded
+    showAlert("CCVibe", "Plugin is loading...");
+
+    let FluxDispatcher: any = null;
+    let hookCount = 0;
+
+    // Try to get FluxDispatcher from vendetta/metro/common
     try {
-        vendetta = (window as any).vendetta || (window as any).bunny || (window as any).revenge;
+        const common = require("@vendetta/metro/common");
+        FluxDispatcher = common?.FluxDispatcher;
+        if (FluxDispatcher) {
+            console.log("[CCVibe] Got FluxDispatcher from metro/common");
+        }
     } catch (e) {
-        console.log("[CCVibe] No global vendetta object");
+        console.log("[CCVibe] metro/common failed:", e);
     }
 
-    // Try to get FluxDispatcher
-    let FluxDispatcher: any;
-    try {
-        const metro = require("@vendetta/metro/common");
-        FluxDispatcher = metro?.FluxDispatcher;
-    } catch (e) {
-        console.log("[CCVibe] Could not load metro/common:", e);
-    }
-
-    // Try alternative ways to get FluxDispatcher
+    // Fallback: try findByProps
     if (!FluxDispatcher) {
         try {
             const { findByProps } = require("@vendetta/metro");
             FluxDispatcher = findByProps("dispatch", "subscribe");
+            if (FluxDispatcher) {
+                console.log("[CCVibe] Got FluxDispatcher via findByProps");
+            }
         } catch (e) {
-            console.log("[CCVibe] Could not find FluxDispatcher via findByProps");
+            console.log("[CCVibe] findByProps failed:", e);
         }
     }
 
-    // Hook into message events
+    // Subscribe to MESSAGE_CREATE
     if (FluxDispatcher?.subscribe) {
-        console.log("[CCVibe] Found FluxDispatcher, subscribing to MESSAGE_CREATE");
+        const handler = async (data: any) => {
+            const msg = data?.message;
+            if (!msg?.content || typeof msg.content !== "string") return;
 
-        const messageHandler = async (event: any) => {
-            try {
-                const message = event?.message;
-                if (!message?.content || typeof message.content !== "string") return;
+            if (isHindiUrdu(msg.content)) {
+                console.log("[CCVibe] Hindi detected:", msg.content);
 
-                if (isHindiUrdu(message.content)) {
-                    console.log("[CCVibe] Detected Hindi:", message.content);
-
-                    // Check cache
-                    const cached = translationCache.get(message.content);
-                    if (cached) {
-                        message.content = cached;
-                        return;
-                    }
-
-                    // Translate
-                    const translated = await translate(message.content);
-                    if (translated !== message.content) {
-                        const final = `${translated} [${message.content}]`;
-                        translationCache.set(message.content, final);
-                        message.content = final;
-                        console.log("[CCVibe] Translated to:", translated);
-                    }
+                const cached = translationCache.get(msg.content);
+                if (cached) {
+                    msg.content = cached;
+                    return;
                 }
-            } catch (e) {
-                console.log("[CCVibe] Error in handler:", e);
+
+                const translated = await translate(msg.content);
+                if (translated !== msg.content) {
+                    const final = `${translated} [${msg.content}]`;
+                    translationCache.set(msg.content, final);
+                    msg.content = final;
+                    console.log("[CCVibe] Translated:", translated);
+                }
             }
         };
 
-        FluxDispatcher.subscribe("MESSAGE_CREATE", messageHandler);
-        patches.push(() => FluxDispatcher.unsubscribe("MESSAGE_CREATE", messageHandler));
+        FluxDispatcher.subscribe("MESSAGE_CREATE", handler);
+        patches.push(() => FluxDispatcher.unsubscribe("MESSAGE_CREATE", handler));
+        hookCount++;
         console.log("[CCVibe] Subscribed to MESSAGE_CREATE");
-    } else {
-        console.log("[CCVibe] FluxDispatcher not available");
     }
 
-    // Also try patching if patcher is available
-    try {
-        const { before } = require("@vendetta/patcher");
-        const { findByProps } = require("@vendetta/metro");
-
-        if (FluxDispatcher && before) {
+    // Also try dispatch patching
+    if (FluxDispatcher?.dispatch) {
+        try {
+            const { before } = require("@vendetta/patcher");
             const unpatch = before("dispatch", FluxDispatcher, (args: any[]) => {
                 const event = args[0];
                 if (event?.type === "MESSAGE_CREATE" && event?.message?.content) {
                     if (isHindiUrdu(event.message.content)) {
-                        console.log("[CCVibe] Intercepted via dispatch:", event.message.content);
+                        console.log("[CCVibe] Intercepted:", event.message.content);
                     }
                 }
                 return args;
             });
             patches.push(unpatch);
-            console.log("[CCVibe] Patched FluxDispatcher.dispatch");
-        }
-    } catch (e) {
-        console.log("[CCVibe] Could not set up patcher:", e);
+            hookCount++;
+        } catch (e) { }
     }
 
-    console.log("[CCVibe] Plugin loaded with", patches.length, "hooks");
+    // Final status alert
+    if (hookCount > 0) {
+        showAlert("CCVibe Loaded!", `Successfully set up ${hookCount} hook(s).\n\nSend a Hindi message to test!`);
+    } else {
+        showAlert("CCVibe Error", "Could not find FluxDispatcher.\nPlugin may not work.");
+    }
+
+    console.log("[CCVibe] Loaded with", hookCount, "hooks");
 };
 
 export const onUnload = () => {
-    console.log("[CCVibe] Unloading...");
+    console.log("[CCVibe] Unloading");
     for (const unpatch of patches) {
         try { unpatch(); } catch (e) { }
     }
     patches.length = 0;
     translationCache.clear();
-    console.log("[CCVibe] Unloaded");
+    showAlert("CCVibe", "Plugin unloaded");
 };
 
-// Default export for compatibility
 export default { onLoad, onUnload };
