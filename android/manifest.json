@@ -7,7 +7,7 @@
             "id": "000000000000000000"
         }
     ],
-    "main": "dist/index.js",
+    "main": "index.js",
     "vendetta": {
         "icon": "ic_locale_24px"
     },
